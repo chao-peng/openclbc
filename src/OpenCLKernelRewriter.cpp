@@ -24,8 +24,10 @@ using namespace clang;
 using namespace clang::tooling;
 
 std::string outputFileName;
+std::string outputDirectory;
 int numConditions;
-std::map<int, std::string> branchMap;
+std::map<int, std::string> conditionLineMap;
+std::map<int, std::string> conditionStringMap;
 
 class ASTVisitorForKernel : public RecursiveASTVisitor<ASTVisitorForKernel> {
 public:
@@ -35,7 +37,14 @@ public:
             // Deal with If
             IfStmt *IfStatement = cast<IfStmt>(s);
             std::string locIfStatement = IfStatement->getLocStart().printToString(myRewriter.getSourceMgr());
-            branchMap[numConditions] = locIfStatement;
+            std::string conditionIfStatement = myRewriter.getRewrittenText(IfStatement->getCond()->getSourceRange());
+            SourceLocation conditionStart = myRewriter.getSourceMgr().getFileLoc(IfStatement->getCond()->getLocStart());
+            SourceLocation conditionEnd = myRewriter.getSourceMgr().getFileLoc(IfStatement->getCond()->getLocEnd());
+            SourceRange conditionRange;
+            conditionRange.setBegin(conditionStart);
+            conditionRange.setEnd(conditionEnd);
+            conditionLineMap[numConditions] = locIfStatement;
+            conditionStringMap[numConditions] = myRewriter.getRewrittenText(conditionRange);
 
             Stmt* Then = IfStatement->getThen();
             if(isa<CompoundStmt>(Then)) {
@@ -65,7 +74,7 @@ public:
                         << "}\n";
                 myRewriter.ReplaceText(
                     newRange.getBegin(),
-                    myRewriter.getRewrittenText(Then->getSourceRange()).length() + 1,
+                    myRewriter.getRewrittenText(newRange).length() + 1,
                     sourcestream.str()
                 );
             }
@@ -113,7 +122,7 @@ public:
                         << "}";
                     myRewriter.ReplaceText(
                         newRange.getBegin(),
-                        myRewriter.getRewrittenText(Else->getSourceRange()).length() + 1,
+                        myRewriter.getRewrittenText(newRange).length() + 1,
                         sourcestream.str()
                     );
                 }
@@ -201,15 +210,41 @@ public:
             source.append("\n");
         }
 
+        // Write modified kernel source code
         std::ofstream fileWriter;
         fileWriter.open(outputFileName);
         fileWriter << source;
         fileWriter.close();
         
+        // Write data file
+        std::string dataFileAddr(outputDirectory);
+        std::stringstream outputBuffer;
+        dataFileAddr.append("ocl_bc.dat");
+        fileWriter.open(dataFileAddr);
+        for (int i = 0; i < numConditions; i++){
+            outputBuffer << "Condition ID: " << i << "\n";
+            outputBuffer << "Source code line: " << conditionLineMap[i] << "\n";
+            outputBuffer << "Condition: " << conditionStringMap[i] << "\n";
+        }
+        /*
+        auto itLineMap = conditionLineMap.begin();
+        auto itStringMap = conditionStringMap.begin();
+        while (itLineMap != conditionLineMap.end() && itStringMap != conditionStringMap.end()){
+            outputBuffer << itLineMap->second << "\n";
+            outputBuffer << itStringMap->second << "\n";
+            itLineMap++;
+            itStringMap++;
+        }
+        */
+        outputBuffer << "\n";
+        fileWriter << outputBuffer.str();
+        fileWriter.close();
     }
 
     virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci, 
         StringRef file) override {
+            std::string inputFileName = file.str();
+            outputFileName = outputFileName.append(inputFileName.substr(inputFileName.find_last_of("/") + 1, inputFileName.size() - inputFileName.find_last_of("/") - 1));
             myRewriter.setSourceMgr(ci.getSourceManager(), ci.getLangOpts());
             return llvm::make_unique<ASTConsumerForKernel>(myRewriter);
         }
@@ -218,9 +253,10 @@ private:
     Rewriter myRewriter;
 };
 
-std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputFileName) {
+std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory) {
     numConditions = 0;
-    outputFileName = newOutputFileName;
+    outputDirectory = newOutputDirectory;
+    outputFileName = newOutputDirectory;
     tool->run(newFrontendActionFactory<FrontendActionForKernel>().get());
-    return branchMap;
+    return conditionLineMap;
 }
