@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 
 #include "clang/AST/AST.h"
 #include "clang/AST/ASTConsumer.h"
@@ -26,8 +27,75 @@ using namespace clang::tooling;
 std::string outputFileName;
 std::string outputDirectory;
 int numConditions;
+int countConditions;
 std::map<int, std::string> conditionLineMap;
 std::map<int, std::string> conditionStringMap;
+std::set<std::string> setFunctions;
+
+class ASTVisitorForCountingBranches : public RecursiveASTVisitor<ASTVisitorForCountingBranches> {
+public:
+    explicit ASTVisitorForCountingBranches(Rewriter &r) : myRewriter(r) {}
+
+    bool VisitStmt(Stmt *s) {
+        if (isa<IfStmt>(s)){
+            countConditions++;
+        }
+        return true;
+    }
+    
+    bool VisitFunctionDecl(FunctionDecl *f){
+        myRewriter.InsertTextBefore(f->getLocStart(),"/*function*/\n");
+        SourceLocation locStart, locEnd;
+        SourceRange sr;
+        locStart = f->getLocStart();
+        locEnd = f->getLocStart().getLocWithOffset(8);
+        sr.setBegin(locStart);
+        sr.setEnd(locEnd);
+        
+        std::string typeString = myRewriter.getRewrittenText(sr);
+
+        if (typeString != "__kernel"){
+            if (f->hasBody()){
+                setFunctions.insert(f->getQualifiedNameAsString());
+            }
+        }
+        return true;
+    }
+    
+
+private:
+    Rewriter &myRewriter;
+};
+
+class ASTConsumerForCountingBranches : public ASTConsumer{
+public:
+    ASTConsumerForCountingBranches(Rewriter &r) : visitor(r) {}
+
+    bool HandleTopLevelDecl(DeclGroupRef DR) override {
+        for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
+            // Traverse the declaration using our AST visitor.
+            visitor.TraverseDecl(*b);
+            //(*b)->dump();
+        }
+    return true;
+    }
+
+private:
+  ASTVisitorForCountingBranches visitor;
+};
+
+class FrontendActionForCountingBranches : public ASTFrontendAction {
+public:
+    FrontendActionForCountingBranches(){}        
+
+    virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci, 
+        StringRef file) override {
+            return llvm::make_unique<ASTConsumerForCountingBranches>(myRewriter);
+        }
+
+private:
+    Rewriter myRewriter;
+};
 
 class ASTVisitorForKernel : public RecursiveASTVisitor<ASTVisitorForKernel> {
 public:
@@ -133,7 +201,7 @@ public:
                 std::stringstream newElse;
                 newElse << "else {\n" 
                     << stmtRecordCoverage(2 * numConditions + 1)
-                    << "\n}";
+                    << "}";
                 myRewriter.InsertTextAfter(
                     IfStatement->getSourceRange().getEnd().getLocWithOffset(2),
                     newElse.str()
@@ -141,18 +209,79 @@ public:
             }
             
             numConditions++;
+        } else if (isa<CallExpr>(s)){
+            CallExpr *functionCall = cast<CallExpr>(s);
+            SourceLocation startLoc = myRewriter.getSourceMgr().getFileLoc(
+                    functionCall->getCallee()->getLocStart());
+            SourceLocation endLoc = myRewriter.getSourceMgr().getFileLoc(
+                    functionCall->getCallee()->getLocEnd());
+            SourceRange newRange;
+            newRange.setBegin(startLoc);
+            newRange.setEnd(endLoc);
+            std::string functionName = myRewriter.getRewrittenText(newRange);
+            if (setFunctions.find(functionName) != setFunctions.end()){
+                myRewriter.InsertTextAfter(
+                    functionCall->getLocEnd().getLocWithOffset(0),
+                    localRecorderArgument()
+                );
+            }
         }
         
         return true;
     }
 
     bool VisitFunctionDecl(FunctionDecl *f){
-        if (f->hasBody()){
-            SourceLocation loc = f->getBody()->getLocStart().getLocWithOffset(-2);
-            myRewriter.InsertTextAfter(loc, declRecorder());
+        // If there exist branches
+        // Need to do this because if We do nothing with the original code, rewriter buffer will be empty
+        if (countConditions != 0){
+            // Need to deal with 4 possible types of function declarations
+            // 1. __kernel function - add both __global parameter and __local array definition
+            // 2. __kernel function prototype - add _global parameter
+            // 3. non-kernel function - add _local array parameter
+            // 4. non-kernel function prototype - same of 3
+
+            // If it is a kernel function, typeString = "__kernel"
+            SourceLocation locStart, locEnd;
+            SourceRange sr;
+            locStart = f->getLocStart();
+            locEnd = f->getLocStart().getLocWithOffset(8);
+            sr.setBegin(locStart);
+            sr.setEnd(locEnd);
+            std::string typeString = myRewriter.getRewrittenText(sr);
+
+            if (typeString == "__kernel"){
+                if (f->hasBody()){
+                    // add global recorder array as argument to function definition
+                    SourceLocation loc = f->getBody()->getLocStart().getLocWithOffset(-2);
+                    myRewriter.InsertTextAfter(loc, declRecorder());
+
+                    // define recorder array as __local array
+                    loc = f->getBody()->getLocStart().getLocWithOffset(2);
+                    myRewriter.InsertTextAfter(loc, declLocalRecorder());
+                    
+                    // update local recorder to global recorder array
+                    loc = f->getBody()->getLocEnd();
+                    myRewriter.InsertTextBefore(loc, stmtUpdateGlobalRecorder());
+                }
+                else {
+                    // add global recorder array as argument to function prototype
+                    SourceLocation loc = f->getLocEnd();
+                    myRewriter.InsertTextAfter(loc.getLocWithOffset(-2), declRecorder());
+                }
+            } else {
+                // Not a kernel function
+                if (f->hasBody()){
+                    SourceLocation loc = f->getBody()->getLocStart().getLocWithOffset(-2);
+                    myRewriter.InsertTextAfter(loc, declLocalRecorderArgument());
+                } else {
+                    SourceLocation loc = f->getLocEnd();
+                    myRewriter.InsertTextAfter(loc.getLocWithOffset(-2), declLocalRecorderArgument());
+                }
+            }
         } else {
-            SourceLocation loc = f->getLocEnd();
-            myRewriter.InsertTextAfter(loc, declRecorder());
+            // No branches
+            SourceLocation loc = f->getLocStart();
+            myRewriter.InsertTextBefore(loc, "/*No branches*/ \n");
         }
         return true;
     }
@@ -162,13 +291,42 @@ private:
 
     std::string stmtRecordCoverage(const int& id){
         std::stringstream ss;
-        ss << kernel_rewriter_constants::COVERAGE_RECORDER_NAME << "[" << id << "] = true;\n";
+        // old implementation
+        // ss << kernel_rewriter_constants::COVERAGE_RECORDER_NAME << "[" << id << "] = true;\n";
+        // replaced by atomic_or operation to avoid data race
+        ss << "atomic_or(&" << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << id << "], 1);\n";
         return ss.str();
     }
 
     std::string declRecorder(){
         std::stringstream ss;
-        ss << ", __global int* " << kernel_rewriter_constants::COVERAGE_RECORDER_NAME;
+        ss << ", __global int* " << kernel_rewriter_constants::GLOBAL_COVERAGE_RECORDER_NAME;
+        return ss.str();
+    }
+
+    std::string declLocalRecorder(){
+        std::stringstream ss;
+        ss << "__local int* " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << 2 * countConditions << "];\n";
+        return ss.str();
+    }
+
+    std::string declLocalRecorderArgument(){
+        std::stringstream ss;
+        ss << ", __local int* " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME;
+        return ss.str();
+    }
+
+    std::string localRecorderArgument(){
+        std::stringstream ss;
+        ss << ", " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME;
+        return ss.str();
+    }
+
+    std::string stmtUpdateGlobalRecorder(){
+        std::stringstream ss;
+        ss << "for (int update_recorder_i = 0; update_recorder_i < " << (countConditions*2) << "; update_recorder_i++) { \n";
+        ss << "  atomic_or(&" << kernel_rewriter_constants::GLOBAL_COVERAGE_RECORDER_NAME << "[update_recorder_i], " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[update_recorder_i]); \n";
+        ss << "}\n";
         return ss.str();
     }
 };
@@ -181,7 +339,7 @@ public:
         for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
             // Traverse the declaration using our AST visitor.
             visitor.TraverseDecl(*b);
-            (*b)->dump();
+            //(*b)->dump();
         }
     return true;
     }
@@ -195,7 +353,6 @@ public:
     FrontendActionForKernel(){}
 
     void EndSourceFileAction() override {
-        
         const RewriteBuffer *buffer = myRewriter.getRewriteBufferFor(myRewriter.getSourceMgr().getMainFileID());
         if (buffer == NULL){
             llvm::outs() << "Rewriter buffer is null. Cannot write in file.\n";
@@ -217,10 +374,9 @@ public:
         fileWriter.close();
         
         // Write data file
-        std::string dataFileAddr(outputDirectory);
+        std::string dataFileName = outputFileName + ".dat";
         std::stringstream outputBuffer;
-        dataFileAddr.append("ocl_bc.dat");
-        fileWriter.open(dataFileAddr);
+        fileWriter.open(dataFileName);
         for (int i = 0; i < numConditions; i++){
             outputBuffer << "Condition ID: " << i << "\n";
             outputBuffer << "Source code line: " << conditionLineMap[i] << "\n";
@@ -255,8 +411,10 @@ private:
 
 std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory) {
     numConditions = 0;
+    countConditions = 0;
     outputDirectory = newOutputDirectory;
     outputFileName = newOutputDirectory;
+    tool->run(newFrontendActionFactory<FrontendActionForCountingBranches>().get());
     tool->run(newFrontendActionFactory<FrontendActionForKernel>().get());
     return conditionLineMap;
 }

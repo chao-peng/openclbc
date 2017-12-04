@@ -2,7 +2,8 @@
 #define OCL_KERNEL_BRANCH_COVERAGE_CHECKER_CONSTANTS
 
 namespace kernel_rewriter_constants{
-    const char* const COVERAGE_RECORDER_NAME = "ocl_kernel_branch_triggered_recorder";
+    const char* const GLOBAL_COVERAGE_RECORDER_NAME = "ocl_kernel_branch_triggered_recorder";
+    const char* const LOCAL_COVERAGE_RECORDER_NAME = "my_ocl_kernel_branch_triggered_recorder";
 }
 
 namespace error_code{
