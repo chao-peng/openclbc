@@ -97,9 +97,9 @@ public:
     virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci, 
         StringRef file) override {
             kernelSourceFile = file.str();
-            if (!UserConfig::hasFakeHeader(kernelSourceFile)){
-                numAddedLines = UserConfig::generateFakeHeader(configFileName, kernelSourceFile);
-            }
+            //if (!UserConfig::hasFakeHeader(kernelSourceFile)){
+            //    numAddedLines = UserConfig::generateFakeHeader(configFileName, kernelSourceFile);
+            //}
             myRewriter.setSourceMgr(ci.getSourceManager(), ci.getLangOpts());
             return llvm::make_unique<ASTConsumerForKernelInvastigator>(myRewriter);
         }
@@ -350,7 +350,7 @@ private:
 
     std::string declLocalRecorder(){
         std::stringstream ss;
-        ss << "__local int* " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << 2 * countConditions << "];\n";
+        ss << "__local int " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << 2 * countConditions << "];\n";
         return ss.str();
     }
 
@@ -431,14 +431,14 @@ public:
         fileWriter.close();
 
         // Remove fake header statements in the input kernel file
-        if (UserConfig::hasFakeHeader(kernelSourceFile)){
-            UserConfig::removeFakeHeader(kernelSourceFile);
-        }
+        //if (UserConfig::hasFakeHeader(kernelSourceFile)){
+        //    UserConfig::removeFakeHeader(kernelSourceFile);
+        //}
 
         // Remove fake header statements in the generated kernel file
-        if (UserConfig::hasFakeHeader(outputFileName)){
-            UserConfig::removeFakeHeader(outputFileName);
-        }
+        //if (UserConfig::hasFakeHeader(outputFileName)){
+        //    UserConfig::removeFakeHeader(outputFileName);
+        //}
     }
 
     virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci, 
@@ -456,13 +456,12 @@ private:
     // need original rewriter to retrieve correct text from original code
 };
 
-std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory, std::string userConfigFileName) {
+std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory, int newNumAddedLines) {
     numConditions = 0;
     countConditions = 0;
-    numAddedLines = 0;
+    numAddedLines = newNumAddedLines;
     outputDirectory = newOutputDirectory;
     outputFileName = newOutputDirectory;
-    configFileName = userConfigFileName;
     tool->run(newFrontendActionFactory<ASTFrontendActionForKernelInvastigator>().get());    
     tool->run(newFrontendActionFactory<ASTFrontendActionForKernelRewriter>().get());
     return conditionLineMap;

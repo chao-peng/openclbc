@@ -8,5 +8,5 @@
 
 
 
-std::map<int, std::string> rewriteOpenclKernel(clang::tooling::ClangTool* tool, std::string newOutputFileName, std::string userConfigFileName);
+std::map<int, std::string> rewriteOpenclKernel(clang::tooling::ClangTool* tool, std::string newOutputFileName, int newNumAddedLines);
 #endif
