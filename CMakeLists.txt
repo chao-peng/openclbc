@@ -8,7 +8,9 @@ add_clang_executable(openclbc
     src/HostCodeInvastigator.h
     src/Main.cpp
     src/OpenCLKernelRewriter.cpp
-    src/OpenCLKernelRewriter.h)
+    src/OpenCLKernelRewriter.h
+    src/UserConfig.cpp
+    src/UserConfig.h)
         
 target_link_libraries(openclbc
     clangAST

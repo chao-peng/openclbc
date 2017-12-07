@@ -19,22 +19,25 @@
 #include "llvm/Support/raw_ostream.h"
 #include "clang/Basic/LLVM.h"
 
+#include "OpenCLKernelRewriter.h"
 #include "Constants.h"
+#include "UserConfig.h"
 
 using namespace clang;
 using namespace clang::tooling;
 
 std::string outputFileName;
 std::string outputDirectory;
-int numConditions;
-int countConditions;
-std::map<int, std::string> conditionLineMap;
-std::map<int, std::string> conditionStringMap;
-std::set<std::string> setFunctions;
+std::string configFileName;
+int numConditions; // Used for labelling if-conditions when rewriting the kernel code
+int countConditions; // Used for counting if-conditions before rewriting the kernel code
+std::map<int, std::string> conditionLineMap; // Line number of each condition
+std::map<int, std::string> conditionStringMap; // Details of each condition
+std::set<std::string> setFunctions; // A set of user-defined functions
 
-class ASTVisitorForCountingBranches : public RecursiveASTVisitor<ASTVisitorForCountingBranches> {
+class RecursiveASTVisitorForKernelInvastigator : public RecursiveASTVisitor<RecursiveASTVisitorForKernelInvastigator> {
 public:
-    explicit ASTVisitorForCountingBranches(Rewriter &r) : myRewriter(r) {}
+    explicit RecursiveASTVisitorForKernelInvastigator(Rewriter &r) : myRewriter(r) {}
 
     bool VisitStmt(Stmt *s) {
         if (isa<IfStmt>(s)){
@@ -43,8 +46,7 @@ public:
         return true;
     }
     
-    bool VisitFunctionDecl(FunctionDecl *f){
-        myRewriter.InsertTextBefore(f->getLocStart(),"/*function*/\n");
+    bool VisitFunctionDecl(FunctionDecl *f) {
         SourceLocation locStart, locEnd;
         SourceRange sr;
         locStart = f->getLocStart();
@@ -53,7 +55,6 @@ public:
         sr.setEnd(locEnd);
         
         std::string typeString = myRewriter.getRewrittenText(sr);
-
         if (typeString != "__kernel"){
             if (f->hasBody()){
                 setFunctions.insert(f->getQualifiedNameAsString());
@@ -67,9 +68,9 @@ private:
     Rewriter &myRewriter;
 };
 
-class ASTConsumerForCountingBranches : public ASTConsumer{
+class ASTConsumerForKernelInvastigator : public ASTConsumer{
 public:
-    ASTConsumerForCountingBranches(Rewriter &r) : visitor(r) {}
+    ASTConsumerForKernelInvastigator(Rewriter &r) : visitor(r) {}
 
     bool HandleTopLevelDecl(DeclGroupRef DR) override {
         for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
@@ -81,25 +82,61 @@ public:
     }
 
 private:
-  ASTVisitorForCountingBranches visitor;
+  RecursiveASTVisitorForKernelInvastigator visitor;
 };
 
-class FrontendActionForCountingBranches : public ASTFrontendAction {
+class ASTFrontendActionForKernelInvastigator : public ASTFrontendAction {
 public:
-    FrontendActionForCountingBranches(){}        
+    ASTFrontendActionForKernelInvastigator(){}
 
     virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci, 
         StringRef file) override {
-            return llvm::make_unique<ASTConsumerForCountingBranches>(myRewriter);
+            if (!hasFakeHeader(file.str())){
+                addFakeHeader(file.str());
+            }
+            myRewriter.setSourceMgr(ci.getSourceManager(), ci.getLangOpts());
+            return llvm::make_unique<ASTConsumerForKernelInvastigator>(myRewriter);
         }
 
 private:
     Rewriter myRewriter;
+
+    bool hasFakeHeader(std::string inputFileName){
+        std::ifstream kernelFileStream(inputFileName);
+        std::string line;
+        std::string targetLine = "#ifndef ";
+        targetLine.append(kernel_rewriter_constants::FAKE_HEADER_MACRO);
+        while (std::getline(kernelFileStream, line)){
+            if (line.find(targetLine) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void addFakeHeader(std::string inputFileName){
+        std::stringstream kernelSource;
+        std::string line;
+        std::fstream kernelFileStream(inputFileName, std::ios::in);
+        UserConfig myConfig(configFileName);
+
+        kernelSource << myConfig.generateFakeHeader();
+
+        while(std::getline(kernelFileStream, line)){
+            kernelSource<<line<<"\n";
+        }
+        kernelFileStream.close();
+
+        std::fstream newKernelFileStream(inputFileName, std::ios::out);
+        newKernelFileStream << kernelSource.str();
+        newKernelFileStream.close();
+    }
 };
 
-class ASTVisitorForKernel : public RecursiveASTVisitor<ASTVisitorForKernel> {
+class RecursiveASTVisitorForKernelRewriter : public RecursiveASTVisitor<RecursiveASTVisitorForKernelRewriter> {
 public:
-    explicit ASTVisitorForKernel(Rewriter &r) : myRewriter(r) {}
+    explicit RecursiveASTVisitorForKernelRewriter(Rewriter &r, Rewriter &original_r) : myRewriter(r), originalRewriter (original_r){}
+    
     bool VisitStmt(Stmt *s) {
         if (isa<IfStmt>(s)) {
             // Deal with If
@@ -219,6 +256,8 @@ public:
             newRange.setBegin(startLoc);
             newRange.setEnd(endLoc);
             std::string functionName = myRewriter.getRewrittenText(newRange);
+            functionName = originalRewriter.getRewrittenText(functionCall->getCallee()->getSourceRange());
+            std::cout << "[function call] " << functionCall->getLocStart().printToString(originalRewriter.getSourceMgr()) << "\n" << functionName << "\n";
             if (setFunctions.find(functionName) != setFunctions.end()){
                 myRewriter.InsertTextAfter(
                     functionCall->getLocEnd().getLocWithOffset(0),
@@ -288,6 +327,7 @@ public:
 
 private:
     Rewriter &myRewriter;
+    Rewriter &originalRewriter;
 
     std::string stmtRecordCoverage(const int& id){
         std::stringstream ss;
@@ -331,9 +371,9 @@ private:
     }
 };
 
-class ASTConsumerForKernel : public ASTConsumer{
+class ASTConsumerForKernelRewriter : public ASTConsumer{
 public:
-    ASTConsumerForKernel(Rewriter &r) : visitor(r) {}
+    ASTConsumerForKernelRewriter(Rewriter &r, Rewriter &original_r) : visitor(r, original_r) {}
 
     bool HandleTopLevelDecl(DeclGroupRef DR) override {
         for (DeclGroupRef::iterator b = DR.begin(), e = DR.end(); b != e; ++b) {
@@ -345,12 +385,12 @@ public:
     }
 
 private:
-  ASTVisitorForKernel visitor;
+  RecursiveASTVisitorForKernelRewriter visitor;
 };
 
-class FrontendActionForKernel : public ASTFrontendAction {
+class ASTFrontendActionForKernelRewriter : public ASTFrontendAction {
 public:
-    FrontendActionForKernel(){}
+    ASTFrontendActionForKernelRewriter(){}
 
     void EndSourceFileAction() override {
         const RewriteBuffer *buffer = myRewriter.getRewriteBufferFor(myRewriter.getSourceMgr().getMainFileID());
@@ -402,19 +442,23 @@ public:
             std::string inputFileName = file.str();
             outputFileName = outputFileName.append(inputFileName.substr(inputFileName.find_last_of("/") + 1, inputFileName.size() - inputFileName.find_last_of("/") - 1));
             myRewriter.setSourceMgr(ci.getSourceManager(), ci.getLangOpts());
-            return llvm::make_unique<ASTConsumerForKernel>(myRewriter);
-        }
+            originalRewriter.setSourceMgr(ci.getSourceManager(), ci.getLangOpts());
+            return llvm::make_unique<ASTConsumerForKernelRewriter>(myRewriter, originalRewriter);
+    }
 
 private:
     Rewriter myRewriter;
+    Rewriter originalRewriter;
+    // need original rewriter to retrieve correct text from original code
 };
 
-std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory) {
+std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory, std::string userConfigFileName) {
     numConditions = 0;
     countConditions = 0;
     outputDirectory = newOutputDirectory;
     outputFileName = newOutputDirectory;
-    tool->run(newFrontendActionFactory<FrontendActionForCountingBranches>().get());
-    tool->run(newFrontendActionFactory<FrontendActionForKernel>().get());
+    configFileName = userConfigFileName;
+    tool->run(newFrontendActionFactory<ASTFrontendActionForKernelInvastigator>().get());    
+    tool->run(newFrontendActionFactory<ASTFrontendActionForKernelRewriter>().get());
     return conditionLineMap;
 }
