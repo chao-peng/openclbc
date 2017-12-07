@@ -35,10 +35,12 @@ std::map<int, std::string> conditionLineMap; // Line number of each condition
 std::map<int, std::string> conditionStringMap; // Details of each condition
 std::set<std::string> setFunctions; // A set of user-defined functions
 
+// First AST visitor: counting if-conditions and user-defined functions
 class RecursiveASTVisitorForKernelInvastigator : public RecursiveASTVisitor<RecursiveASTVisitorForKernelInvastigator> {
 public:
     explicit RecursiveASTVisitorForKernelInvastigator(Rewriter &r) : myRewriter(r) {}
 
+    // count the number of if-conditions
     bool VisitStmt(Stmt *s) {
         if (isa<IfStmt>(s)){
             countConditions++;
@@ -46,6 +48,7 @@ public:
         return true;
     }
     
+    // record user-defined functions in a set
     bool VisitFunctionDecl(FunctionDecl *f) {
         SourceLocation locStart, locEnd;
         SourceRange sr;
@@ -62,7 +65,6 @@ public:
         }
         return true;
     }
-    
 
 private:
     Rewriter &myRewriter;
@@ -85,6 +87,7 @@ private:
   RecursiveASTVisitorForKernelInvastigator visitor;
 };
 
+// Before visiting the AST, add a fake header so that clang will not complain about opencl library calls and macros
 class ASTFrontendActionForKernelInvastigator : public ASTFrontendAction {
 public:
     ASTFrontendActionForKernelInvastigator(){}
@@ -133,6 +136,11 @@ private:
     }
 };
 
+// Second and main AST visitor:
+// 1. Rewrite if blocks to update the local recorder array
+// 2. Add the pointer to the local recorder array as the last argument to user-defined function declaration and calls
+// 3. Add a loop to the end of kernel function to update the local recorder array to the global one
+// 4. Add the pointer to the global recorder array as the last argument to the kernel entry function 
 class RecursiveASTVisitorForKernelRewriter : public RecursiveASTVisitor<RecursiveASTVisitorForKernelRewriter> {
 public:
     explicit RecursiveASTVisitorForKernelRewriter(Rewriter &r, Rewriter &original_r) : myRewriter(r), originalRewriter (original_r){}
@@ -140,6 +148,7 @@ public:
     bool VisitStmt(Stmt *s) {
         if (isa<IfStmt>(s)) {
             // Deal with If
+            // Record details of this condition
             IfStmt *IfStatement = cast<IfStmt>(s);
             std::string locIfStatement = IfStatement->getLocStart().printToString(myRewriter.getSourceMgr());
             std::string conditionIfStatement = myRewriter.getRewrittenText(IfStatement->getCond()->getSourceRange());
@@ -148,7 +157,9 @@ public:
             SourceRange conditionRange;
             conditionRange.setBegin(conditionStart);
             conditionRange.setEnd(conditionEnd);
+            // Insert to the hashmap of line numbers of conditions
             conditionLineMap[numConditions] = locIfStatement;
+            // Insert to the hashmap of text of conditions
             conditionStringMap[numConditions] = myRewriter.getRewrittenText(conditionRange);
 
             Stmt* Then = IfStatement->getThen();
@@ -172,16 +183,30 @@ public:
                 newRange.setEnd(endLoc);
 
                 std::stringstream sourcestream;
+                // If there's no else block/statement, it's better add else here
+                // or it might be confused with end of function and end of if
+                bool hasElse = false;
+                if (IfStatement->getElse()) hasElse = true;
                 sourcestream << "{\n"
-                        << myRewriter.getRewrittenText(newRange) 
+                        << originalRewriter.getRewrittenText(newRange) 
                         << ";\n"
                         << stmtRecordCoverage(2 * numConditions)
                         << "}\n";
+                
+                if (!hasElse){
+                    sourcestream << "else { \n"
+                        << stmtRecordCoverage(2 * numConditions + 1)
+                        << "}\n";
+                }
                 myRewriter.ReplaceText(
                     newRange.getBegin(),
-                    myRewriter.getRewrittenText(newRange).length() + 1,
+                    originalRewriter.getRewrittenText(newRange).length() + 1,
                     sourcestream.str()
                 );
+                if(!hasElse){
+                    numConditions++;
+                    return true;
+                }
             }
             
             Stmt* Else = IfStatement->getElse();
@@ -257,7 +282,6 @@ public:
             newRange.setEnd(endLoc);
             std::string functionName = myRewriter.getRewrittenText(newRange);
             functionName = originalRewriter.getRewrittenText(functionCall->getCallee()->getSourceRange());
-            std::cout << "[function call] " << functionCall->getLocStart().printToString(originalRewriter.getSourceMgr()) << "\n" << functionName << "\n";
             if (setFunctions.find(functionName) != setFunctions.end()){
                 myRewriter.InsertTextAfter(
                     functionCall->getLocEnd().getLocWithOffset(0),
