@@ -29,6 +29,8 @@ using namespace clang::tooling;
 std::string outputFileName;
 std::string outputDirectory;
 std::string configFileName;
+std::string kernelSourceFile;
+int numAddedLines;
 int numConditions; // Used for labelling if-conditions when rewriting the kernel code
 int countConditions; // Used for counting if-conditions before rewriting the kernel code
 std::map<int, std::string> conditionLineMap; // Line number of each condition
@@ -94,8 +96,9 @@ public:
 
     virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci, 
         StringRef file) override {
-            if (!hasFakeHeader(file.str())){
-                addFakeHeader(file.str());
+            kernelSourceFile = file.str();
+            if (!UserConfig::hasFakeHeader(kernelSourceFile)){
+                numAddedLines = UserConfig::generateFakeHeader(configFileName, kernelSourceFile);
             }
             myRewriter.setSourceMgr(ci.getSourceManager(), ci.getLangOpts());
             return llvm::make_unique<ASTConsumerForKernelInvastigator>(myRewriter);
@@ -103,37 +106,6 @@ public:
 
 private:
     Rewriter myRewriter;
-
-    bool hasFakeHeader(std::string inputFileName){
-        std::ifstream kernelFileStream(inputFileName);
-        std::string line;
-        std::string targetLine = "#ifndef ";
-        targetLine.append(kernel_rewriter_constants::FAKE_HEADER_MACRO);
-        while (std::getline(kernelFileStream, line)){
-            if (line.find(targetLine) != std::string::npos) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void addFakeHeader(std::string inputFileName){
-        std::stringstream kernelSource;
-        std::string line;
-        std::fstream kernelFileStream(inputFileName, std::ios::in);
-        UserConfig myConfig(configFileName);
-
-        kernelSource << myConfig.generateFakeHeader();
-
-        while(std::getline(kernelFileStream, line)){
-            kernelSource<<line<<"\n";
-        }
-        kernelFileStream.close();
-
-        std::fstream newKernelFileStream(inputFileName, std::ios::out);
-        newKernelFileStream << kernelSource.str();
-        newKernelFileStream.close();
-    }
 };
 
 // Second and main AST visitor:
@@ -158,7 +130,15 @@ public:
             conditionRange.setBegin(conditionStart);
             conditionRange.setEnd(conditionEnd);
             // Insert to the hashmap of line numbers of conditions
-            conditionLineMap[numConditions] = locIfStatement;
+            // Line number needs to be adjusted due to possible added lines of fake header statements
+            size_t p1, p2;
+            p1 = locIfStatement.substr(0, locIfStatement.find_last_of(':')).find_last_of(':') + 1;
+            p2 = locIfStatement.find_last_of(':');
+            int newLineNumber = std::stoi(locIfStatement.substr(p1, p2-p1)) - numAddedLines;
+            std::string newLocIfStatement = locIfStatement.substr(0, p1);
+            newLocIfStatement.append(std::to_string(newLineNumber));
+            newLocIfStatement.append(locIfStatement.substr(p2));
+            conditionLineMap[numConditions] = newLocIfStatement;
             // Insert to the hashmap of text of conditions
             conditionStringMap[numConditions] = myRewriter.getRewrittenText(conditionRange);
 
@@ -446,19 +426,19 @@ public:
             outputBuffer << "Source code line: " << conditionLineMap[i] << "\n";
             outputBuffer << "Condition: " << conditionStringMap[i] << "\n";
         }
-        /*
-        auto itLineMap = conditionLineMap.begin();
-        auto itStringMap = conditionStringMap.begin();
-        while (itLineMap != conditionLineMap.end() && itStringMap != conditionStringMap.end()){
-            outputBuffer << itLineMap->second << "\n";
-            outputBuffer << itStringMap->second << "\n";
-            itLineMap++;
-            itStringMap++;
-        }
-        */
         outputBuffer << "\n";
         fileWriter << outputBuffer.str();
         fileWriter.close();
+
+        // Remove fake header statements in the input kernel file
+        if (UserConfig::hasFakeHeader(kernelSourceFile)){
+            UserConfig::removeFakeHeader(kernelSourceFile);
+        }
+
+        // Remove fake header statements in the generated kernel file
+        if (UserConfig::hasFakeHeader(outputFileName)){
+            UserConfig::removeFakeHeader(outputFileName);
+        }
     }
 
     virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci, 
@@ -479,6 +459,7 @@ private:
 std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory, std::string userConfigFileName) {
     numConditions = 0;
     countConditions = 0;
+    numAddedLines = 0;
     outputDirectory = newOutputDirectory;
     outputFileName = newOutputDirectory;
     configFileName = userConfigFileName;

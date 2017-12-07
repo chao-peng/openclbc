@@ -8,8 +8,10 @@ namespace kernel_rewriter_constants{
 }
 
 namespace error_code{
+    const int STATUS_OK = 0;
     const int TWO_MANY_HOST_FILE_SUPPLIED = 1;
     const int NO_HOST_FILE_SUPPLIED = 2;
+    const int REMOVE_KERNEL_FAKE_HEADER_FAILED_KERNEL_DOES_NOT_EXIST = 3;
 }
 
 #endif
