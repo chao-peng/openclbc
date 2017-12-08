@@ -29,7 +29,7 @@ int UserConfig::generateFakeHeader(std::string configFileName, std::string kerne
     header << "#include <opencl-c.h>\n"; // for opencl library calls
     numAddedLines += 3;
     for (auto it = setMacro.begin(); it != setMacro.end(); it++) {
-        header << "#define " << *it << " 0\n";
+        header << "#define " << *it << "\n";
         numAddedLines++;
     }
     header << "#endif\n";

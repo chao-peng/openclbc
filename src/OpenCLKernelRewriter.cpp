@@ -430,15 +430,13 @@ public:
         fileWriter << outputBuffer.str();
         fileWriter.close();
 
-        // Remove fake header statements in the input kernel file
-        //if (UserConfig::hasFakeHeader(kernelSourceFile)){
-        //    UserConfig::removeFakeHeader(kernelSourceFile);
-        //}
+        if (UserConfig::hasFakeHeader(kernelSourceFile)){
+            UserConfig::removeFakeHeader(kernelSourceFile);
+        }
 
-        // Remove fake header statements in the generated kernel file
-        //if (UserConfig::hasFakeHeader(outputFileName)){
-        //    UserConfig::removeFakeHeader(outputFileName);
-        //}
+        if (UserConfig::hasFakeHeader(outputFileName)){
+            UserConfig::removeFakeHeader(outputFileName);
+        }
     }
 
     virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci, 
