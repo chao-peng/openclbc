@@ -18,6 +18,7 @@ int UserConfig::generateFakeHeader(std::string configFileName, std::string kerne
     while (std::getline(configFileStream, line)){
         if(line == "[MACRO]") {
             while(std::getline(configFileStream,line)){
+                if (line == "[ENDMACRO]") break;
                 setMacro.insert(line);
             }
         }
