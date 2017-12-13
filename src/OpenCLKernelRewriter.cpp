@@ -119,6 +119,7 @@ public:
     
     bool VisitStmt(Stmt *s) {
         if (isa<IfStmt>(s)) {
+            std::cout << "[" << numConditions << "] If\n";
             // Deal with If
             // Record details of this condition
             IfStmt *IfStatement = cast<IfStmt>(s);
@@ -243,8 +244,8 @@ public:
                 std::stringstream newElse;
                 newElse << "else {\n" 
                     << stmtRecordCoverage(2 * numConditions + 1)
-                    << "}";
-                myRewriter.InsertTextAfter(
+                    << "}\n";
+                myRewriter.InsertTextBefore(
                     IfStatement->getSourceRange().getEnd().getLocWithOffset(2),
                     newElse.str()
                 );
@@ -291,7 +292,7 @@ public:
             sr.setBegin(locStart);
             sr.setEnd(locEnd);
             std::string typeString = myRewriter.getRewrittenText(sr);
-
+            std::cout <<"function declaration\n";
             if (typeString == "__kernel"){
                 if (f->hasBody()){
                     // add global recorder array as argument to function definition
@@ -304,7 +305,7 @@ public:
                     
                     // update local recorder to global recorder array
                     loc = f->getBody()->getLocEnd();
-                    myRewriter.InsertTextBefore(loc, stmtUpdateGlobalRecorder());
+                    myRewriter.InsertTextAfter(loc, stmtUpdateGlobalRecorder());
                 }
                 else {
                     // add global recorder array as argument to function prototype
