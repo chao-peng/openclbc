@@ -12,17 +12,7 @@ int UserConfig::generateFakeHeader(std::string configFileName, std::string kerne
     if (hasFakeHeader(kernelFileName)) {
         return 0;
     }
-    std::set<std::string> setMacro;
-    std::fstream configFileStream(configFileName, std::ios::in);
-    std::string line;
-    while (std::getline(configFileStream, line)){
-        if(line == "[MACRO]") {
-            while(std::getline(configFileStream,line)){
-                if (line == "[ENDMACRO]") break;
-                setMacro.insert(line);
-            }
-        }
-    }
+    std::set<std::string> setMacro = getValues(configFileName, "macro");
     
     std::stringstream header;
     header << "#ifndef " << kernel_rewriter_constants::FAKE_HEADER_MACRO << "\n";
@@ -38,8 +28,8 @@ int UserConfig::generateFakeHeader(std::string configFileName, std::string kerne
 
     std::stringstream kernelSource;
     std::fstream kernelFileStream(kernelFileName, std::ios::in);
+    std::string line;
     kernelSource << header.str();
-
     while(std::getline(kernelFileStream, line)){
         kernelSource<<line<<"\n";
     }
@@ -97,4 +87,52 @@ bool UserConfig::hasFakeHeader(std::string kernelFileName){
         }
     }
     return false;
+}
+
+std::set<std::string> UserConfig::getValues(std::string configFileName, std::string key){
+    std::ifstream in(configFileName);
+    std::string line, line_key, line_value;
+    size_t key_begin, key_length, value_begin, value_length, i, line_length;
+    std::set<std::string> result;
+
+    while(std::getline(in, line)){
+        line_length = line.length();
+        if (line_length == 0) continue;
+        key_begin = 0;
+        key_length = 0;
+		while (key_begin < line_length && line.at(key_begin) == ' '){
+            key_begin++;
+        }
+        if (key_begin >= line_length) {
+            continue;
+        }
+		i = key_begin;
+		while (i < line_length && line.at(i) != ':' && line.at(i) != ' ') {
+		  i++;
+		  key_length++;
+		}
+		if (i >= line_length)
+        {
+            continue;
+        }
+   		line_key = line.substr(key_begin, key_length);
+        if (line_key != key) {
+            continue;
+        }
+
+		value_begin = i;
+		value_length = 0;
+		while (value_begin < line_length && (line.at(value_begin) == ' ' || line.at(value_begin) == ':')) value_begin++;
+		if (value_begin >= line_length){
+            continue;
+        }
+		i = value_begin;
+		while (i < line_length) {
+		  i++;
+		  value_length++;
+		}
+		line_value = line.substr(value_begin, value_length);
+        result.insert(line_value);
+    }
+    return result;
 }

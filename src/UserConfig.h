@@ -2,6 +2,7 @@
 #define OPENCLBC_USER_CONFIG_H
 
 #include <string>
+#include <set>
 
 class UserConfig{
 public:
@@ -12,6 +13,8 @@ public:
     static int removeFakeHeader(std::string kernelFileName);
 
     static bool hasFakeHeader(std::string kernelFileName);
+
+    static std::set<std::string> getValues(std::string configFileName, std::string key);
 };
 
 #endif
