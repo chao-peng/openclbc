@@ -7,22 +7,28 @@
 #include "UserConfig.h"
 #include "Constants.h"
 
-int UserConfig::generateFakeHeader(std::string configFileName, std::string kernelFileName){
+UserConfig::UserConfig(std::string filename) : userConfigFileName(filename){}
+
+int UserConfig::generateFakeHeader(std::string kernelFileName){
     int numAddedLines = 0;
     if (hasFakeHeader(kernelFileName)) {
         return 0;
     }
-    std::set<std::string> setMacro = getValues(configFileName, "macro");
+    std::set<std::string> setMacro = this->getValues("macro");
     
     std::stringstream header;
     header << "#ifndef " << kernel_rewriter_constants::FAKE_HEADER_MACRO << "\n";
     header << "#define " << kernel_rewriter_constants::FAKE_HEADER_MACRO << "\n";
     header << "#include <opencl-c.h>\n"; // for opencl library calls
     numAddedLines += 3;
-    for (auto it = setMacro.begin(); it != setMacro.end(); it++) {
-        header << "#define " << *it << "\n";
-        numAddedLines++;
+
+    if (!setMacro.empty()){
+        for (auto it = setMacro.begin(); it != setMacro.end(); it++) {
+            header << "#define " << *it << "\n";
+            numAddedLines++;
+        }
     }
+    
     header << "#endif\n";
     numAddedLines++;
 
@@ -89,11 +95,15 @@ bool UserConfig::hasFakeHeader(std::string kernelFileName){
     return false;
 }
 
-std::set<std::string> UserConfig::getValues(std::string configFileName, std::string key){
-    std::ifstream in(configFileName);
+std::set<std::string> UserConfig::getValues(std::string key){
+    std::ifstream in(userConfigFileName);
     std::string line, line_key, line_value;
     size_t key_begin, key_length, value_begin, value_length, i, line_length;
     std::set<std::string> result;
+
+    if (!in) {
+        return result;
+    }
 
     while(std::getline(in, line)){
         line_length = line.length();
@@ -134,5 +144,18 @@ std::set<std::string> UserConfig::getValues(std::string configFileName, std::str
 		line_value = line.substr(value_begin, value_length);
         result.insert(line_value);
     }
+    return result;
+}
+
+std::string UserConfig::getValue(std::string key){
+    std::set<std::string> tmp_value = this->getValues(key);
+    std::string result;
+
+    if (tmp_value.empty()){
+        result = "";
+    } else {
+        result = *tmp_value.begin();
+    }
+
     return result;
 }

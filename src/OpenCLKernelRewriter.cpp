@@ -37,6 +37,16 @@ std::map<int, std::string> conditionLineMap; // Line number of each condition
 std::map<int, std::string> conditionStringMap; // Details of each condition
 std::set<std::string> setFunctions; // A set of user-defined functions
 
+// Variables below are used to generate host code
+std::string kernel_function_name;
+std::string error_code_variable;
+std::string error_code_checker;
+std::string cl_context;
+std::string cl_command_queue;
+std::string recorder_array_name;
+std::string data_file_path;
+std::stringstream generated_host_code;
+
 // First AST visitor: counting if-conditions and user-defined functions
 class RecursiveASTVisitorForKernelInvastigator : public RecursiveASTVisitor<RecursiveASTVisitorForKernelInvastigator> {
 public:
@@ -291,6 +301,7 @@ public:
             sr.setBegin(locStart);
             sr.setEnd(locEnd);
             std::string typeString = myRewriter.getRewrittenText(sr);
+            std::string functionName = f->getQualifiedNameAsString();
             if (typeString == "__kernel"){
                 if (f->hasBody()){
                     // add global recorder array as argument to function definition
@@ -304,6 +315,12 @@ public:
                     // update local recorder to global recorder array
                     loc = f->getBody()->getLocEnd();
                     myRewriter.InsertTextAfter(loc, stmtUpdateGlobalRecorder());
+
+                    // Host code generator part 2: Set argument
+                    int argumentLocation = f->param_size();
+                    generated_host_code << "\x1B[34mopenclbc - set argument to kernel function\x1B[0m\n"
+                        << error_code_checker << "( clSetKernelArg(" << functionName << ", " << argumentLocation << ", sizeof(cl_mem), &d_" << recorder_array_name << "));\n\n";
+
                 }
                 else {
                     // add global recorder array as argument to function prototype
@@ -349,7 +366,7 @@ private:
 
     std::string declLocalRecorder(){
         std::stringstream ss;
-        ss << "__local int " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << 2 * countConditions << "];\n";
+        ss << "__local int " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << 2 * countConditions << "] = {0};\n";
         return ss.str();
     }
 
@@ -418,6 +435,7 @@ public:
         
         // Write data file
         std::string dataFileName = outputFileName + ".dat";
+        data_file_path = dataFileName;
         std::stringstream outputBuffer;
         fileWriter.open(dataFileName);
         for (int i = 0; i < numConditions; i++){
@@ -453,13 +471,69 @@ private:
     // need original rewriter to retrieve correct text from original code
 };
 
-std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory, int newNumAddedLines) {
+std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory, int newNumAddedLines, UserConfig* userConfig) {
     numConditions = 0;
     countConditions = 0;
     numAddedLines = newNumAddedLines;
     outputDirectory = newOutputDirectory;
     outputFileName = newOutputDirectory;
+
+    kernel_function_name = userConfig->getValue("kernel_function_name");
+    recorder_array_name = kernel_function_name + "_branch_coverage_recorder";
+    cl_context = userConfig->getValue("cl_context");
+    error_code_variable = userConfig->getValue("error_code_variable");
+    error_code_checker = userConfig->getValue("error_code_checker");
+    cl_command_queue = userConfig->getValue("cl_command_queue");
+
     tool->run(newFrontendActionFactory<ASTFrontendActionForKernelInvastigator>().get());    
+
+    // Host code generator part 1: Declare branch coverage recorder array
+    generated_host_code << "\x1B[34mopenclbc - recorder array declaration\x1B[0m\n"
+        << "int " << recorder_array_name << "[" << countConditions*2 << "] = {0};\n"
+        << "cl_mem d_" << recorder_array_name << " = clCreateBuffer(" << cl_context << ", CL_MEM_READ_WRITE, sizeof(int)*" << countConditions*2 << ", NULL, &" << error_code_variable << ");\n\n";
+
     tool->run(newFrontendActionFactory<ASTFrontendActionForKernelRewriter>().get());
+
+    // Host code generator part3: Get array back from GPU
+    generated_host_code << "\x1B[34mopenclbc - get back from GPU\x1B[0m\n"
+        << error_code_checker << "(clEnqueueReadBuffer(" << cl_command_queue << ", d_" << recorder_array_name << ", CL_TRUE, 0, sizeof(int)*" << countConditions*2 << ", " << recorder_array_name << ", 0, NULL, NULL));\n\n";
+
+    // Host code generator part4: Print result
+    generated_host_code << "\x1B[34mopenclbc - print converage result\x1B[0m\n" 
+        << "int openclbc_total_branches = " << countConditions*2 << ", openclbc_covered_branches = 0;\n"
+        << "double openclbc_result;\n"
+        << "FILE *openclbc_fp;\n"
+        << "char *line = NULL;\n"
+        << "size_t len = 0;\n"
+        << "openclbc_fp = fopen(\"" << data_file_path << "\", \"r\");\n"
+        << "printf(\"\\x1B[34mCondition coverage summary\\x1B[0m\\n\");\n"
+        << "for (int cov_test_i = 0; cov_test_i < " << countConditions*2 << "; cov_test_i+=2){\n"
+        << "  getline(&line, &len, openclbc_fp);\n"
+        << "  printf(\"%s\", line);\n"
+        << "  getline(&line, &len, openclbc_fp);\n"
+        << "  printf(\"%s\", line);\n"
+        << "  getline(&line, &len, openclbc_fp);\n"
+        << "  printf(\"%s\", line);\n"
+        << "  if (" << recorder_array_name << "[cov_test_i]) {\n" 
+        << "    printf(\"\\x1B[32mTrue branch covered\\x1B[0m\\n\");\n"
+        << "    openclbc_covered_branches++;\n"
+        << "  } else { \n"
+        << "    printf(\"\\x1B[31mTrue branch not covered\\x1B[0m\\n\");\n"
+        << "  }\n"
+        << "  if (" << recorder_array_name << "[cov_test_i + 1]) {\n" 
+        << "    printf(\"\\x1B[32mFalse branch covered\\x1B[0m\\n\");\n"
+        << "    openclbc_covered_branches++;\n"
+        << "  } else { \n"
+        << "    printf(\"\\x1B[31mFalse branch not covered\\x1B[0m\\n\");\n"
+        << "  }\n"
+        << "}\n"
+        << "fclose(openclbc_fp);\n"
+        << "openclbc_result = (double)openclbc_covered_branches / (double)openclbc_total_branches * 100.0;\n"
+        << "printf(\"Total coverage %-4.2f\\n\", coverage_report);\n";
+
+    std::cout << generated_host_code.str();
+    
+
+
     return conditionLineMap;
 }

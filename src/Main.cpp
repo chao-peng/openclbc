@@ -33,15 +33,15 @@ int main(int argc, const char** argv){
 
     auto it = optionsParser.getSourcePathList().begin();
     std::string kernelFileName(it->c_str());
-    int numAddedLines = 0;
-    if (userConfigFileName != "")
-        numAddedLines = UserConfig::generateFakeHeader(userConfigFileName.c_str(), kernelFileName);
+
+    UserConfig userConfig(userConfigFileName.c_str());
+    int numAddedLines = userConfig.generateFakeHeader(kernelFileName);
 
     clang::tooling::ClangTool tool(optionsParser.getCompilations(), optionsParser.getSourcePathList());
 
     std::string directory(outputDirectory.c_str());
     if (directory.at(directory.size() - 1) != '/') directory.append("/");
-    rewriteOpenclKernel(&tool, directory, numAddedLines);
+    rewriteOpenclKernel(&tool, directory, numAddedLines, &userConfig);
 
     UserConfig::removeFakeHeader(kernelFileName);
 }
