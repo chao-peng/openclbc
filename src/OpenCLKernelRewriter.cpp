@@ -119,7 +119,6 @@ public:
     
     bool VisitStmt(Stmt *s) {
         if (isa<IfStmt>(s)) {
-            std::cout << "[" << numConditions << "] If\n";
             // Deal with If
             // Record details of this condition
             IfStmt *IfStatement = cast<IfStmt>(s);
@@ -292,7 +291,6 @@ public:
             sr.setBegin(locStart);
             sr.setEnd(locEnd);
             std::string typeString = myRewriter.getRewrittenText(sr);
-            std::cout <<"function declaration\n";
             if (typeString == "__kernel"){
                 if (f->hasBody()){
                     // add global recorder array as argument to function definition

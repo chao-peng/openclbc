@@ -33,7 +33,9 @@ int main(int argc, const char** argv){
 
     auto it = optionsParser.getSourcePathList().begin();
     std::string kernelFileName(it->c_str());
-    int numAddedLines = UserConfig::generateFakeHeader(userConfigFileName.c_str(), kernelFileName);
+    int numAddedLines = 0;
+    if (userConfigFileName != "")
+        numAddedLines = UserConfig::generateFakeHeader(userConfigFileName.c_str(), kernelFileName);
 
     clang::tooling::ClangTool tool(optionsParser.getCompilations(), optionsParser.getSourcePathList());
 
