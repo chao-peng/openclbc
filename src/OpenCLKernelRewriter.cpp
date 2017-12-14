@@ -366,7 +366,7 @@ private:
 
     std::string declLocalRecorder(){
         std::stringstream ss;
-        ss << "__local int " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << 2 * countConditions << "] = {0};\n";
+        ss << "__local int " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << 2 * countConditions << "];\n";
         return ss.str();
     }
 
@@ -490,7 +490,8 @@ std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newO
     // Host code generator part 1: Declare branch coverage recorder array
     generated_host_code << "\x1B[34mopenclbc - recorder array declaration\x1B[0m\n"
         << "int " << recorder_array_name << "[" << countConditions*2 << "] = {0};\n"
-        << "cl_mem d_" << recorder_array_name << " = clCreateBuffer(" << cl_context << ", CL_MEM_READ_WRITE, sizeof(int)*" << countConditions*2 << ", NULL, &" << error_code_variable << ");\n\n";
+        << "cl_mem d_" << recorder_array_name << " = clCreateBuffer(" << cl_context << ", CL_MEM_READ_WRITE, sizeof(int)*" << countConditions*2 << ", NULL, &" << error_code_variable << ");\n"
+        << error_code_checker << "(clEnqueueWriteBuffer(" << cl_command_queue << ", d_" << recorder_array_name << ", CL_TRUE, 0, " << countConditions*2 << "*sizeof(int)," << recorder_array_name << ", 0, NULL ,NULL));\n\n";
 
     tool->run(newFrontendActionFactory<ASTFrontendActionForKernelRewriter>().get());
 
@@ -531,9 +532,12 @@ std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newO
         << "openclbc_result = (double)openclbc_covered_branches / (double)openclbc_total_branches * 100.0;\n"
         << "printf(\"Total coverage %-4.2f\\n\", coverage_report);\n";
 
-    std::cout << generated_host_code.str();
+    std::cout << generated_host_code.str() << "Host code above has also been written in the output directory\n";
     
-
+    std::string hostCodeFile = outputDirectory + "hostcode.txt";
+    std::ofstream hostCodeWriter(hostCodeFile);
+    hostCodeWriter << generated_host_code.str();
+    hostCodeWriter.close();
 
     return conditionLineMap;
 }
