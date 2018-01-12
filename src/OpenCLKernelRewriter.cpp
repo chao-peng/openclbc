@@ -507,6 +507,7 @@ std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newO
         << "char *line = NULL;\n"
         << "size_t len = 0;\n"
         << "openclbc_fp = fopen(\"" << data_file_path << "\", \"r\");\n"
+        << "if (openclbc_fp){"
         << "printf(\"\\x1B[34mCondition coverage summary\\x1B[0m\\n\");\n"
         << "for (int cov_test_i = 0; cov_test_i < " << countConditions*2 << "; cov_test_i+=2){\n"
         << "  getline(&line, &len, openclbc_fp);\n"
@@ -530,7 +531,10 @@ std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newO
         << "}\n"
         << "fclose(openclbc_fp);\n"
         << "openclbc_result = (double)openclbc_covered_branches / (double)openclbc_total_branches * 100.0;\n"
-        << "printf(\"Total coverage %-4.2f\\n\", coverage_report);\n";
+        << "printf(\"Total coverage %-4.2f\\n\", openclbc_result);\n"
+        << "} else {"
+        << "  printf(\"OpenCLBC data file not found\\n\");\n"
+        << "}\n\n";
 
     std::cout << generated_host_code.str() << "Host code above has also been written in the output directory\n";
     
