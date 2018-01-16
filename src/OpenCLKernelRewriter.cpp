@@ -156,8 +156,8 @@ public:
             if(isa<CompoundStmt>(Then)) {
                 // Then is a compound statement
                 // Add coverage recorder to the end of the compound
-                myRewriter.InsertTextBefore(
-                    Then->getLocEnd(),
+                myRewriter.InsertTextAfter(
+                    Then->getLocStart().getLocWithOffset(1),
                     stmtRecordCoverage(2 * numConditions)
                     );
             } else {
@@ -177,14 +177,13 @@ public:
                 // or it might be confused with end of function and end of if
                 bool hasElse = false;
                 if (IfStatement->getElse()) hasElse = true;
-                sourcestream << "{\n"
-                        << originalRewriter.getRewrittenText(newRange) 
-                        << ";\n"
+                sourcestream << "{"
                         << stmtRecordCoverage(2 * numConditions)
-                        << "}\n";
+                        << originalRewriter.getRewrittenText(newRange) 
+                        << ";\n}";
                 
                 if (!hasElse){
-                    sourcestream << "else { \n"
+                    sourcestream << " else { "
                         << stmtRecordCoverage(2 * numConditions + 1)
                         << "}\n";
                 }
@@ -205,8 +204,8 @@ public:
                 if (isa<CompoundStmt>(Else)) {
                     // Else is a compound statement
                     // Add coverage recorder to the end of the compound
-                    myRewriter.InsertTextBefore(
-                        Else->getLocEnd(),
+                    myRewriter.InsertTextAfter(
+                        Else->getLocStart().getLocWithOffset(1),
                         stmtRecordCoverage(2 * numConditions + 1)
                         );
                 } else if (isa<IfStmt>(Else)) {
@@ -235,11 +234,10 @@ public:
                     newRange.setEnd(endLoc);
                 
                     std::stringstream sourcestream;
-                    sourcestream << "{\n"
-                        << myRewriter.getRewrittenText(newRange) 
-                        << ";\n"
+                    sourcestream << "{"
                         << stmtRecordCoverage(2 * numConditions + 1)
-                        << "}";
+                        << myRewriter.getRewrittenText(newRange) 
+                        << ";\n}";
                     myRewriter.ReplaceText(
                         newRange.getBegin(),
                         myRewriter.getRewrittenText(newRange).length() + 1,
@@ -354,7 +352,7 @@ private:
         // old implementation
         // ss << kernel_rewriter_constants::COVERAGE_RECORDER_NAME << "[" << id << "] = true;\n";
         // replaced by atomic_or operation to avoid data race
-        ss << "atomic_or(&" << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << id << "], 1);\n";
+        ss << "\natomic_or(&" << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << id << "], 1);\n";
         return ss.str();
     }
 
