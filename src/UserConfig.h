@@ -21,6 +21,8 @@ public:
     std::set<std::string> getValues(std::string key);
 
     std::string getValue(std::string key);
+
+    bool isEmpty();
 };
 
 #endif

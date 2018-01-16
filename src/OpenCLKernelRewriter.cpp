@@ -536,12 +536,13 @@ std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newO
         << "  printf(\"OpenCLBC data file not found\\n\");\n"
         << "}\n\n";
 
-    std::cout << generated_host_code.str() << "Host code above has also been written in the output directory\n";
-    
-    std::string hostCodeFile = outputDirectory + "hostcode.txt";
-    std::ofstream hostCodeWriter(hostCodeFile);
-    hostCodeWriter << generated_host_code.str();
-    hostCodeWriter.close();
+    if (!userConfig->isEmpty()){
+        std::cout << generated_host_code.str() << "Host code above has also been written in the output directory\n";
+        std::string hostCodeFile = outputDirectory + "hostcode.txt";
+        std::ofstream hostCodeWriter(hostCodeFile);
+        hostCodeWriter << generated_host_code.str();
+        hostCodeWriter.close();
+    }
 
     return conditionLineMap;
 }

@@ -159,3 +159,7 @@ std::string UserConfig::getValue(std::string key){
 
     return result;
 }
+
+bool UserConfig::isEmpty(){
+    return userConfigFileName == ""? true: false;
+}
