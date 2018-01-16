@@ -276,6 +276,10 @@ public:
                     localRecorderArgument()
                 );
             }
+
+            if (functionName == "barrier") {
+                std::cout << "[DEBUG]" << functionCall->getNumArgs() <<"\n";
+            }
         }
         
         return true;
@@ -327,12 +331,19 @@ public:
                 }
             } else {
                 // Not a kernel function
+                bool needComma = f->getNumParams() == 0? false: true;
                 if (f->hasBody()){
-                    SourceLocation loc = f->getBody()->getLocStart().getLocWithOffset(-2);
-                    myRewriter.InsertTextAfter(loc, declLocalRecorderArgument());
+                    // If it is a function definition
+                    SourceRange funcSourceRange = f->getSourceRange();
+                    std::string funcSourceText = myRewriter.getRewrittenText(funcSourceRange);
+                    std::string funcFirstLine = funcSourceText.substr(0, funcSourceText.find_first_of('{'));
+                    unsigned offset = funcFirstLine.find_last_of(')');
+                    SourceLocation loc = f->getLocStart().getLocWithOffset(offset);
+                    myRewriter.InsertTextAfter(loc, declLocalRecorderArgument(needComma));
                 } else {
+                    // If it is a function declaration without definition
                     SourceLocation loc = f->getLocEnd();
-                    myRewriter.InsertTextAfter(loc.getLocWithOffset(-2), declLocalRecorderArgument());
+                    myRewriter.InsertTextBefore(loc, declLocalRecorderArgument(needComma));
                 }
             }
         } else {
@@ -368,9 +379,13 @@ private:
         return ss.str();
     }
 
-    std::string declLocalRecorderArgument(){
+    std::string declLocalRecorderArgument(bool needComma=true){
         std::stringstream ss;
-        ss << ", __local int* " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME;
+        if (needComma){
+            ss << ", __local int* " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME;
+        } else {
+            ss << "__local int* " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME;
+        }
         return ss.str();
     }
 
