@@ -7,7 +7,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 
-#include "HostCodeInvastigator.h"
+#include "HostCodeGenerator.h"
 #include "OpenCLKernelRewriter.h"
 #include "Constants.h"
 #include "UserConfig.h"
@@ -35,13 +35,18 @@ int main(int argc, const char** argv){
     std::string kernelFileName(it->c_str());
 
     UserConfig userConfig(userConfigFileName.c_str());
-    int numAddedLines = userConfig.generateFakeHeader(kernelFileName);
+    userConfig.generateFakeHeader(kernelFileName);
 
     clang::tooling::ClangTool tool(optionsParser.getCompilations(), optionsParser.getSourcePathList());
 
     std::string directory(outputDirectory.c_str());
     if (directory.at(directory.size() - 1) != '/') directory.append("/");
-    rewriteOpenclKernel(&tool, directory, numAddedLines, &userConfig);
+    int status = rewriteOpenclKernel(&tool, directory, &userConfig);
+    if (status == error_code::NO_NEED_TO_TEST_COVERAGE){
+        std::cout << "\x1B[31mNo branch or barrier found in this kernel. The tool will do nothing.\x1B[0m\n";
+    } else {
+        std::cout << "\x1B[32mDone. Please find rewritten kernel code in the output directory.\x1B[0m\n";
+    }
 
     UserConfig::removeFakeHeader(kernelFileName);
 }

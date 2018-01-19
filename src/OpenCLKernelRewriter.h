@@ -8,5 +8,5 @@
 #include "UserConfig.h"
 
 
-std::map<int, std::string> rewriteOpenclKernel(clang::tooling::ClangTool* tool, std::string newOutputFileName, int newNumAddedLines, UserConfig* userconfig);
+int rewriteOpenclKernel(clang::tooling::ClangTool* tool, std::string newOutputFileName, UserConfig* userconfig);
 #endif

@@ -22,6 +22,7 @@
 #include "OpenCLKernelRewriter.h"
 #include "Constants.h"
 #include "UserConfig.h"
+#include "HostCodeGenerator.h"
 
 using namespace clang;
 using namespace clang::tooling;
@@ -37,15 +38,12 @@ std::map<int, std::string> conditionLineMap; // Line number of each condition
 std::map<int, std::string> conditionStringMap; // Details of each condition
 std::set<std::string> setFunctions; // A set of user-defined functions
 
+int numBarriers;
+int countBarriers;
+std::map<int, std::string> barrierLineMap;
+
 // Variables below are used to generate host code
-std::string kernel_function_name;
-std::string error_code_variable;
-std::string error_code_checker;
-std::string cl_context;
-std::string cl_command_queue;
-std::string recorder_array_name;
-std::string data_file_path;
-std::stringstream generated_host_code;
+HostCodeGenerator hostCodeGenerator;
 
 // First AST visitor: counting if-conditions and user-defined functions
 class RecursiveASTVisitorForKernelInvastigator : public RecursiveASTVisitor<RecursiveASTVisitorForKernelInvastigator> {
@@ -56,6 +54,12 @@ public:
     bool VisitStmt(Stmt *s) {
         if (isa<IfStmt>(s)){
             countConditions++;
+        }else if (isa<CallExpr>(s)){
+            CallExpr *functionCall = cast<CallExpr>(s);
+            std::string functionName = myRewriter.getRewrittenText(functionCall->getCallee()->getSourceRange());
+            if (functionName == "barrier") {
+                countBarriers++;
+            }
         }
         return true;
     }
@@ -141,14 +145,7 @@ public:
             conditionRange.setEnd(conditionEnd);
             // Insert to the hashmap of line numbers of conditions
             // Line number needs to be adjusted due to possible added lines of fake header statements
-            size_t p1, p2;
-            p1 = locIfStatement.substr(0, locIfStatement.find_last_of(':')).find_last_of(':') + 1;
-            p2 = locIfStatement.find_last_of(':');
-            int newLineNumber = std::stoi(locIfStatement.substr(p1, p2-p1)) - numAddedLines;
-            std::string newLocIfStatement = locIfStatement.substr(0, p1);
-            newLocIfStatement.append(std::to_string(newLineNumber));
-            newLocIfStatement.append(locIfStatement.substr(p2));
-            conditionLineMap[numConditions] = newLocIfStatement;
+            conditionLineMap[numConditions] = correctSourceLine(locIfStatement, numAddedLines);
             // Insert to the hashmap of text of conditions
             conditionStringMap[numConditions] = myRewriter.getRewrittenText(conditionRange);
 
@@ -276,9 +273,23 @@ public:
                     localRecorderArgument()
                 );
             }
-
             if (functionName == "barrier") {
-                std::cout << "[DEBUG]" << functionCall->getNumArgs() <<"\n";
+                //Since people usually use OpenCL pre-defined macros as the argument of barrier
+                //It's better to use SourceMgr getFileLoc here to retrieve the argument
+                std::string locBarrierCall = functionCall->getLocStart().printToString(myRewriter.getSourceMgr());
+                barrierLineMap[numBarriers] = correctSourceLine(locBarrierCall, numAddedLines);
+
+                Expr* barrierArg = functionCall->getArg(0);
+                std::stringstream newBarrierCall;
+                SourceLocation barrierArgStartLoc = myRewriter.getSourceMgr().getFileLoc(barrierArg->getLocStart());
+                SourceLocation barrierArgEndLoc = myRewriter.getSourceMgr().getFileLoc(barrierArg->getLocEnd());
+                SourceRange barrierArgRange;
+                barrierArgRange.setBegin(barrierArgStartLoc);
+                barrierArgRange.setEnd(barrierArgEndLoc);
+                newBarrierCall << "OCL_NEW_BARRIER(" << numBarriers << "," << myRewriter.getRewrittenText(barrierArgRange) << ")";
+                myRewriter.ReplaceText(functionCall->getSourceRange(), newBarrierCall.str());
+
+                numBarriers++;
             }
         }
         
@@ -286,70 +297,67 @@ public:
     }
 
     bool VisitFunctionDecl(FunctionDecl *f){
-        // If there exist branches
-        // Need to do this because if We do nothing with the original code, rewriter buffer will be empty
-        if (countConditions != 0){
-            // Need to deal with 4 possible types of function declarations
-            // 1. __kernel function - add both __global parameter and __local array definition
-            // 2. __kernel function prototype - add _global parameter
-            // 3. non-kernel function - add _local array parameter
-            // 4. non-kernel function prototype - same of 3
+        // Need to deal with 4 possible types of function declarations
+        // 1. __kernel function - add both __global parameter and __local array definition
+        // 2. __kernel function prototype - add _global parameter
+        // 3. non-kernel function - add _local array parameter
+        // 4. non-kernel function prototype - same of 3
 
-            // If it is a kernel function, typeString = "__kernel"
-            SourceLocation locStart, locEnd;
-            SourceRange sr;
-            locStart = f->getLocStart();
-            locEnd = f->getLocStart().getLocWithOffset(8);
-            sr.setBegin(locStart);
-            sr.setEnd(locEnd);
-            std::string typeString = myRewriter.getRewrittenText(sr);
-            std::string functionName = f->getQualifiedNameAsString();
-            if (typeString == "__kernel"){
-                if (f->hasBody()){
-                    // add global recorder array as argument to function definition
-                    SourceLocation loc = f->getBody()->getLocStart().getLocWithOffset(-2);
-                    myRewriter.InsertTextAfter(loc, declRecorder());
+        // If it is a kernel function, typeString = "__kernel"
+        SourceLocation locStart, locEnd;
+        SourceRange sr;
+        locStart = f->getLocStart();
+        locEnd = f->getLocStart().getLocWithOffset(8);
+        sr.setBegin(locStart);
+        sr.setEnd(locEnd);
+        std::string typeString = myRewriter.getRewrittenText(sr);
+        std::string functionName = f->getQualifiedNameAsString();
+        bool needComma = f->getNumParams() == 0? false: true;
+        if (typeString == "__kernel"){
+            if (f->hasBody()){
+                // add global recorder array as argument to function definition
+                SourceRange funcSourceRange = f->getSourceRange();
+                std::string funcSourceText = myRewriter.getRewrittenText(funcSourceRange);
+                std::string funcFirstLine = funcSourceText.substr(0, funcSourceText.find_first_of('{'));
+                unsigned offset = funcFirstLine.find_last_of(')');
+                SourceLocation loc = f->getLocStart().getLocWithOffset(offset);
+                myRewriter.InsertTextAfter(loc, declRecorder(needComma));
 
-                    // define recorder array as __local array
-                    loc = f->getBody()->getLocStart().getLocWithOffset(2);
-                    myRewriter.InsertTextAfter(loc, declLocalRecorder());
-                    
-                    // update local recorder to global recorder array
+                // define recorder array as __local array
+                loc = f->getBody()->getLocStart().getLocWithOffset(1);
+                myRewriter.InsertTextAfter(loc, declLocalRecorder());
+                
+                // update local recorder to global recorder array
+                if (countConditions){
                     loc = f->getBody()->getLocEnd();
                     myRewriter.InsertTextAfter(loc, stmtUpdateGlobalRecorder());
+                }
 
-                    // Host code generator part 2: Set argument
-                    int argumentLocation = f->param_size();
-                    generated_host_code << "\x1B[34mopenclbc - set argument to kernel function\x1B[0m\n"
-                        << error_code_checker << "( clSetKernelArg(" << functionName << ", " << argumentLocation << ", sizeof(cl_mem), &d_" << recorder_array_name << "));\n\n";
+                // Host code generator part 2: Set argument
+                int argumentLocation = f->param_size();
+                hostCodeGenerator.setArgument(functionName, argumentLocation);
 
-                }
-                else {
-                    // add global recorder array as argument to function prototype
-                    SourceLocation loc = f->getLocEnd();
-                    myRewriter.InsertTextAfter(loc.getLocWithOffset(-2), declRecorder());
-                }
-            } else {
-                // Not a kernel function
-                bool needComma = f->getNumParams() == 0? false: true;
-                if (f->hasBody()){
-                    // If it is a function definition
-                    SourceRange funcSourceRange = f->getSourceRange();
-                    std::string funcSourceText = myRewriter.getRewrittenText(funcSourceRange);
-                    std::string funcFirstLine = funcSourceText.substr(0, funcSourceText.find_first_of('{'));
-                    unsigned offset = funcFirstLine.find_last_of(')');
-                    SourceLocation loc = f->getLocStart().getLocWithOffset(offset);
-                    myRewriter.InsertTextAfter(loc, declLocalRecorderArgument(needComma));
-                } else {
-                    // If it is a function declaration without definition
-                    SourceLocation loc = f->getLocEnd();
-                    myRewriter.InsertTextBefore(loc, declLocalRecorderArgument(needComma));
-                }
+            }
+            else {
+                // add global recorder array as argument to function prototype
+                SourceLocation loc = f->getLocEnd();
+                myRewriter.InsertTextBefore(loc, declRecorder(needComma));
             }
         } else {
-            // No branches
-            SourceLocation loc = f->getLocStart();
-            myRewriter.InsertTextBefore(loc, "/*No branches*/ \n");
+            // Not a kernel function
+            if (f->hasBody()){
+                // If it is a function definition
+                SourceRange funcSourceRange = f->getSourceRange();
+                std::string funcSourceText = myRewriter.getRewrittenText(funcSourceRange);
+                std::string funcFirstLine = funcSourceText.substr(0, funcSourceText.find_first_of('{'));
+                unsigned offset = funcFirstLine.find_last_of(')');
+                SourceLocation loc = f->getLocStart().getLocWithOffset(offset);
+                myRewriter.InsertTextAfter(loc, declLocalRecorderArgument(needComma));
+            } else {
+                // If it is a function declaration without definition
+                SourceLocation loc = f->getLocEnd();
+                myRewriter.InsertTextBefore(loc, declLocalRecorderArgument(needComma));
+            }
         }
         return true;
     }
@@ -367,31 +375,62 @@ private:
         return ss.str();
     }
 
-    std::string declRecorder(){
+    std::string declRecorder(bool needComma=true){
         std::stringstream ss;
-        ss << ", __global int* " << kernel_rewriter_constants::GLOBAL_COVERAGE_RECORDER_NAME;
+        if (needComma) ss << ", ";
+        if (countConditions){
+            ss << "__global int* " << kernel_rewriter_constants::GLOBAL_COVERAGE_RECORDER_NAME;
+            if (countBarriers){
+                ss << ", __global int* " << kernel_rewriter_constants::GLOBAL_BARRIER_DIVERFENCE_RECORDER_NAME;
+            }
+        } else {
+            if (countBarriers){
+                ss << "__global int* " << kernel_rewriter_constants::GLOBAL_BARRIER_DIVERFENCE_RECORDER_NAME;
+            }
+        }
         return ss.str();
     }
 
     std::string declLocalRecorder(){
         std::stringstream ss;
-        ss << "__local int " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << 2 * countConditions << "];\n";
+        if (countConditions){
+            ss << "__local int " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[" << 2 * countConditions << "];\n";
+        }
+        if (countBarriers){
+            ss << "__local int " << kernel_rewriter_constants::LOCAL_BARRIER_COUNTER_NAME << "[" << countBarriers << "];\n";
+        }
         return ss.str();
     }
 
     std::string declLocalRecorderArgument(bool needComma=true){
         std::stringstream ss;
         if (needComma){
-            ss << ", __local int* " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME;
-        } else {
+            ss << ", ";
+        }
+        if (countConditions){
             ss << "__local int* " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME;
+            if (countBarriers){
+                ss << ", __global int* " << kernel_rewriter_constants::GLOBAL_BARRIER_DIVERFENCE_RECORDER_NAME
+                    << ", __local int* " << kernel_rewriter_constants::LOCAL_BARRIER_COUNTER_NAME;
+            }
+        } else {
+            if (countBarriers){
+                ss << "__global int* " << kernel_rewriter_constants::GLOBAL_BARRIER_DIVERFENCE_RECORDER_NAME
+                    << ", __local int* " << kernel_rewriter_constants::LOCAL_BARRIER_COUNTER_NAME;
+            }
         }
         return ss.str();
     }
 
     std::string localRecorderArgument(){
         std::stringstream ss;
-        ss << ", " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME;
+        if (countConditions){
+            ss << ", " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME;
+        }
+        if (countBarriers){
+            ss << ", " << kernel_rewriter_constants::GLOBAL_BARRIER_DIVERFENCE_RECORDER_NAME
+                    << ", " << kernel_rewriter_constants::LOCAL_BARRIER_COUNTER_NAME;
+        }
         return ss.str();
     }
 
@@ -401,6 +440,17 @@ private:
         ss << "  atomic_or(&" << kernel_rewriter_constants::GLOBAL_COVERAGE_RECORDER_NAME << "[update_recorder_i], " << kernel_rewriter_constants::LOCAL_COVERAGE_RECORDER_NAME << "[update_recorder_i]); \n";
         ss << "}\n";
         return ss.str();
+    }
+
+    std::string correctSourceLine(std::string originalSourceLine, int offset){
+        size_t p1, p2;
+        p1 = originalSourceLine.substr(0, originalSourceLine.find_last_of(':')).find_last_of(':') + 1;
+        p2 = originalSourceLine.find_last_of(':');
+        int newLineNumber = std::stoi(originalSourceLine.substr(p1, p2-p1)) - offset;
+        std::string neworiginalSourceLine = originalSourceLine.substr(0, p1);
+        neworiginalSourceLine.append(std::to_string(newLineNumber));
+        neworiginalSourceLine.append(originalSourceLine.substr(p2));
+        return neworiginalSourceLine;
     }
 };
 
@@ -435,6 +485,12 @@ public:
         std::string source = "";
         std::string line;
         std::istringstream bufferStream(rewriteBuffer);
+
+        if (countBarriers){
+            source.append(kernel_rewriter_constants::NEW_BARRIER_MACRO);
+            source.append("\n");
+        }
+
         while(getline(bufferStream, line)){
             source.append(line);
             source.append("\n");
@@ -448,13 +504,17 @@ public:
         
         // Write data file
         std::string dataFileName = outputFileName + ".dat";
-        data_file_path = dataFileName;
+        hostCodeGenerator.generateHostCode(dataFileName);
         std::stringstream outputBuffer;
         fileWriter.open(dataFileName);
         for (int i = 0; i < numConditions; i++){
             outputBuffer << "Condition ID: " << i << "\n";
             outputBuffer << "Source code line: " << conditionLineMap[i] << "\n";
             outputBuffer << "Condition: " << conditionStringMap[i] << "\n";
+        }
+        for (int i = 0; i < countBarriers; i++){
+            outputBuffer << "Barrier ID: " << i << "\n";
+            outputBuffer << "Source code line: " << barrierLineMap[i] << "\n";
         }
         outputBuffer << "\n";
         fileWriter << outputBuffer.str();
@@ -484,78 +544,32 @@ private:
     // need original rewriter to retrieve correct text from original code
 };
 
-std::map<int, std::string> rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory, int newNumAddedLines, UserConfig* userConfig) {
+int rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory, UserConfig* userConfig) {
     numConditions = 0;
     countConditions = 0;
-    numAddedLines = newNumAddedLines;
+    countBarriers = 0;
+    numBarriers = 0;
+    numAddedLines = userConfig->getNumAddedLines();
     outputDirectory = newOutputDirectory;
     outputFileName = newOutputDirectory;
 
-    kernel_function_name = userConfig->getValue("kernel_function_name");
-    recorder_array_name = kernel_function_name + "_branch_coverage_recorder";
-    cl_context = userConfig->getValue("cl_context");
-    error_code_variable = userConfig->getValue("error_code_variable");
-    error_code_checker = userConfig->getValue("error_code_checker");
-    cl_command_queue = userConfig->getValue("cl_command_queue");
-
     tool->run(newFrontendActionFactory<ASTFrontendActionForKernelInvastigator>().get());    
 
-    // Host code generator part 1: Declare branch coverage recorder array
-    generated_host_code << "\x1B[34mopenclbc - recorder array declaration\x1B[0m\n"
-        << "int " << recorder_array_name << "[" << countConditions*2 << "] = {0};\n"
-        << "cl_mem d_" << recorder_array_name << " = clCreateBuffer(" << cl_context << ", CL_MEM_READ_WRITE, sizeof(int)*" << countConditions*2 << ", NULL, &" << error_code_variable << ");\n"
-        << error_code_checker << "(clEnqueueWriteBuffer(" << cl_command_queue << ", d_" << recorder_array_name << ", CL_TRUE, 0, " << countConditions*2 << "*sizeof(int)," << recorder_array_name << ", 0, NULL ,NULL));\n\n";
+    if (countConditions == 0 && countBarriers == 0){
+        return error_code::NO_NEED_TO_TEST_COVERAGE;
+    }
+
+    hostCodeGenerator.initialise(userConfig, countConditions, countBarriers);
 
     tool->run(newFrontendActionFactory<ASTFrontendActionForKernelRewriter>().get());
 
-    // Host code generator part3: Get array back from GPU
-    generated_host_code << "\x1B[34mopenclbc - get back from GPU\x1B[0m\n"
-        << error_code_checker << "(clEnqueueReadBuffer(" << cl_command_queue << ", d_" << recorder_array_name << ", CL_TRUE, 0, sizeof(int)*" << countConditions*2 << ", " << recorder_array_name << ", 0, NULL, NULL));\n\n";
-
-    // Host code generator part4: Print result
-    generated_host_code << "\x1B[34mopenclbc - print converage result\x1B[0m\n" 
-        << "int openclbc_total_branches = " << countConditions*2 << ", openclbc_covered_branches = 0;\n"
-        << "double openclbc_result;\n"
-        << "FILE *openclbc_fp;\n"
-        << "char *line = NULL;\n"
-        << "size_t len = 0;\n"
-        << "openclbc_fp = fopen(\"" << data_file_path << "\", \"r\");\n"
-        << "if (openclbc_fp){"
-        << "printf(\"\\x1B[34mCondition coverage summary\\x1B[0m\\n\");\n"
-        << "for (int cov_test_i = 0; cov_test_i < " << countConditions*2 << "; cov_test_i+=2){\n"
-        << "  getline(&line, &len, openclbc_fp);\n"
-        << "  printf(\"%s\", line);\n"
-        << "  getline(&line, &len, openclbc_fp);\n"
-        << "  printf(\"%s\", line);\n"
-        << "  getline(&line, &len, openclbc_fp);\n"
-        << "  printf(\"%s\", line);\n"
-        << "  if (" << recorder_array_name << "[cov_test_i]) {\n" 
-        << "    printf(\"\\x1B[32mTrue branch covered\\x1B[0m\\n\");\n"
-        << "    openclbc_covered_branches++;\n"
-        << "  } else { \n"
-        << "    printf(\"\\x1B[31mTrue branch not covered\\x1B[0m\\n\");\n"
-        << "  }\n"
-        << "  if (" << recorder_array_name << "[cov_test_i + 1]) {\n" 
-        << "    printf(\"\\x1B[32mFalse branch covered\\x1B[0m\\n\");\n"
-        << "    openclbc_covered_branches++;\n"
-        << "  } else { \n"
-        << "    printf(\"\\x1B[31mFalse branch not covered\\x1B[0m\\n\");\n"
-        << "  }\n"
-        << "}\n"
-        << "fclose(openclbc_fp);\n"
-        << "openclbc_result = (double)openclbc_covered_branches / (double)openclbc_total_branches * 100.0;\n"
-        << "printf(\"Total coverage %-4.2f\\n\", openclbc_result);\n"
-        << "} else {"
-        << "  printf(\"OpenCLBC data file not found\\n\");\n"
-        << "}\n\n";
-
     if (!userConfig->isEmpty()){
-        std::cout << generated_host_code.str() << "Host code above has also been written in the output directory\n";
+        std::cout << "Referable host code has been written in the output directory\n";
         std::string hostCodeFile = outputDirectory + "hostcode.txt";
         std::ofstream hostCodeWriter(hostCodeFile);
-        hostCodeWriter << generated_host_code.str();
+        hostCodeWriter << hostCodeGenerator.getGeneratedHostCode();
         hostCodeWriter.close();
     }
 
-    return conditionLineMap;
+    return error_code::STATUS_OK;
 }

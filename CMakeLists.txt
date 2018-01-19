@@ -4,8 +4,8 @@ set(LLVM_LINK_COMPONENTS
         
 add_clang_executable(openclbc
     src/Constants.h
-    src/HostCodeInvastigator.cpp
-    src/HostCodeInvastigator.h
+    src/HostCodeGenerator.cpp
+    src/HostCodeGenerator.h
     src/Main.cpp
     src/OpenCLKernelRewriter.cpp
     src/OpenCLKernelRewriter.h

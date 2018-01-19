@@ -7,12 +7,13 @@
 #include "UserConfig.h"
 #include "Constants.h"
 
-UserConfig::UserConfig(std::string filename) : userConfigFileName(filename){}
+UserConfig::UserConfig(std::string filename) : userConfigFileName(filename){
+    numAddedLines = 0;
+}
 
 int UserConfig::generateFakeHeader(std::string kernelFileName){
-    int numAddedLines = 0;
     if (hasFakeHeader(kernelFileName)) {
-        return 0;
+        return error_code::KERNEL_FILE_ALREADY_HAS_FAKE_HEADER;
     }
     std::set<std::string> setMacro = this->getValues("macro");
     
@@ -45,7 +46,7 @@ int UserConfig::generateFakeHeader(std::string kernelFileName){
     newKernelFileStream << kernelSource.str();
     newKernelFileStream.close();
 
-    return numAddedLines;
+    return error_code::STATUS_OK;
 }
 
 int UserConfig::removeFakeHeader(std::string kernelFileName){
@@ -158,6 +159,10 @@ std::string UserConfig::getValue(std::string key){
     }
 
     return result;
+}
+
+int UserConfig::getNumAddedLines(){
+    return numAddedLines;
 }
 
 bool UserConfig::isEmpty(){
