@@ -11,12 +11,19 @@ namespace kernel_rewriter_constants{
         "{\\\n"\
         "  atom_inc(&ocl_kernel_barrier_count[barrierid]);\\\n"\
         "  barrier(arg);\\\n"\
-        "  if (get_local_id(0)==0&&ocl_kernel_barrier_count[barrierid]!=get_local_size(0)) {\\\n"\
+        "  if (ocl_kernel_barrier_count[barrierid]!=ocl_get_general_size()) {\\\n"\
         "    ocl_barrier_divergence_recorder[barrierid]=1;\\\n"\
-        "    ocl_kernel_barrier_count[barrierid]=0;\\\n"\
         "  }\\\n"\
+        "  ocl_kernel_barrier_count[barrierid]=0;\\\n"\
         "  barrier(arg);\\\n"\
-        "}";
+        "}\\\n"\
+        "int get_general_size(){\\\n"\
+        "  int result = 1;\\\n"\
+        "  for (int i=0; i<get_work_dim(); i++){\\\n"\
+        "    result*=get_local_size(i);\\\n"\
+        "  }\\\n"\
+        "  return result;\\\n"\
+        "}\\\n";
 }
 
 namespace error_code{
