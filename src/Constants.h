@@ -16,14 +16,14 @@ namespace kernel_rewriter_constants{
         "  }\\\n"\
         "  ocl_kernel_barrier_count[barrierid]=0;\\\n"\
         "  barrier(arg);\\\n"\
-        "}\\\n"\
-        "int get_general_size(){\\\n"\
+        "}\n"\
+        "int ocl_get_general_size(){\n"\
         "  int result = 1;\\\n"\
-        "  for (int i=0; i<get_work_dim(); i++){\\\n"\
-        "    result*=get_local_size(i);\\\n"\
-        "  }\\\n"\
-        "  return result;\\\n"\
-        "}\\\n";
+        "  for (int i=0; i<get_work_dim(); i++){\n"\
+        "    result*=get_local_size(i);\n"\
+        "  }\n"\
+        "  return result;\n"\
+        "}\n";
 }
 
 namespace error_code{
