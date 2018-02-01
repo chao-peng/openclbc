@@ -14,6 +14,7 @@ namespace kernel_rewriter_constants{
         "  if (ocl_kernel_barrier_count[barrierid]!=ocl_get_general_size()) {\\\n"\
         "    ocl_barrier_divergence_recorder[barrierid]=1;\\\n"\
         "  }\\\n"\
+        "  barrier(arg);\\\n"\
         "  ocl_kernel_barrier_count[barrierid]=0;\\\n"\
         "  barrier(arg);\\\n"\
         "}\n"\
