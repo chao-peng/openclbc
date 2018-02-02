@@ -29,6 +29,8 @@ public:
 
     void generateHostCode(std::string dataFilePath);
 
+    bool isHostCodeComplete();
+
     std::string getGeneratedHostCode();
 };
 

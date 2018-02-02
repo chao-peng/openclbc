@@ -135,3 +135,14 @@ void HostCodeGenerator::generateHostCode(std::string dataFilePath){
 std::string HostCodeGenerator::getGeneratedHostCode(){
     return generatedHostCode.str();
 }
+
+bool HostCodeGenerator::isHostCodeComplete(){
+    if (this->barrierRecorderArrayName.empty()) return false;
+    if (this->branchRecorderArrayName.empty()) return false;
+    if (this->clCommandQueue.empty()) return false;
+    if (this->clContext.empty()) return false;
+    if (this->errorCodeVariable.empty()) return false;
+    if (this->kernelFunctionName.empty()) return false;
+    if (this->numBarriers==0 && this->numConditions==0) return false;
+    return true;
+}

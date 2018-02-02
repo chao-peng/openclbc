@@ -563,8 +563,8 @@ int rewriteOpenclKernel(ClangTool* tool, std::string newOutputDirectory, UserCon
 
     tool->run(newFrontendActionFactory<ASTFrontendActionForKernelRewriter>().get());
 
-    if (!userConfig->isEmpty()){
-        std::cout << "Referable host code has been written in the output directory\n";
+    if (hostCodeGenerator.isHostCodeComplete()){
+        std::cout << "\x1B[32mReferable host code has been written in the output directory\x1B[0m\n";
         std::string hostCodeFile = outputDirectory + "hostcode.txt";
         std::ofstream hostCodeWriter(hostCodeFile);
         hostCodeWriter << hostCodeGenerator.getGeneratedHostCode();
